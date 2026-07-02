@@ -40,7 +40,7 @@ export function AppSidebar() {
       <SidebarHeader className="px-3 py-4">
         <div className="flex items-center gap-2.5">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <Sparkles className="h-4.5 w-4.5" strokeWidth={2.2} />
+            <Sparkles className="h-5 w-5" strokeWidth={2.2} />
           </div>
           {!collapsed && (
             <div className="min-w-0">

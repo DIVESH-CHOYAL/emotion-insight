@@ -38,7 +38,7 @@ function ActionCard({
   return (
     <div className="group relative rounded-3xl border border-border/70 bg-card p-8 shadow-soft transition-all duration-300 hover:-translate-y-1 hover:shadow-elevated">
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary text-primary">
-        <Icon className="h-5.5 w-5.5" strokeWidth={2} />
+        <Icon className="h-6 w-6" strokeWidth={2} />
       </div>
       <h3 className="mt-6 text-xl font-semibold tracking-tight">{title}</h3>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground max-w-sm">
