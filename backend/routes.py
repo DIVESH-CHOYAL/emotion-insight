@@ -9,16 +9,10 @@ from typing import Dict, Any
 
 from backend import schemas
 from backend.services.camera import VideoCamera
-from backend.services.detector import FaceDetector
-from backend.services.predictor import EmotionPredictor
 
 logger = logging.getLogger("backend.routes")
 
 router = APIRouter(tags=["Emotion Detection"])
-
-# Reusable detector and predictor for image uploads
-image_detector = FaceDetector()
-image_predictor = EmotionPredictor()
 
 # Camera instance singleton
 camera = VideoCamera()
@@ -74,19 +68,18 @@ async def predict_image(file: UploadFile = File(...)) -> schemas.PredictionRespo
                 detail="Could not decode image."
             )
 
-        # Detect faces (MediaPipe works on color BGR images)
-        faces_data = image_detector.detect_faces(img)
-        if not faces_data:
+        # Run Advanced Emotion Engine detection and prediction
+        predictions = camera.emotion_engine.process_frame_as_dicts(img)
+        if not predictions:
             logger.info("No faces detected in the uploaded image.")
             return schemas.PredictionResponse(face_detected=False)
 
         # Select the primary (largest) face based on bounding box size
-        primary_face = max(faces_data, key=lambda f: f[0][2] * f[0][3])
-        (x, y, w, h), aligned_crop = primary_face
-        
-        # Predict using the aligned crop BGR image
-        emotion, confidence = image_predictor.predict_emotion(aligned_crop)
-        probabilities = image_predictor.predict_probabilities(aligned_crop)
+        primary = max(predictions, key=lambda p: p["bbox"][2] * p["bbox"][3])
+        x, y, w, h = primary["bbox"]
+        emotion = primary["emotion"]
+        confidence = primary["confidence"]
+        probabilities = primary["probabilities"]
         
         # Apply adaptive confidence threshold
         from backend.config import CONFIDENCE_THRESHOLD
@@ -194,3 +187,83 @@ def camera_snapshot() -> StreamingResponse:
             detail="Camera frame not available. Ensure the camera is running."
         )
     return StreamingResponse(io.BytesIO(frame_bytes), media_type="image/jpeg")
+
+@router.get(
+    "/settings",
+    response_model=schemas.SettingsResponse,
+    summary="Get Current Camera Settings",
+    description="Returns the currently active camera index, confidence threshold, and bounding box preference."
+)
+def get_settings() -> Dict[str, Any]:
+    from backend import config
+    return {
+        "status": "success",
+        "camera_index": config.CAMERA_INDEX,
+        "confidence_threshold": config.CONFIDENCE_THRESHOLD,
+        "draw_bounding_boxes": getattr(config, 'DRAW_BOUNDING_BOXES', True)
+    }
+
+@router.post(
+    "/settings",
+    response_model=schemas.SettingsResponse,
+    summary="Update Camera Settings",
+    description="Updates the camera index, confidence threshold, and bounding box preference. Persists to .env and releases the active camera if running."
+)
+def update_settings(settings: schemas.SettingsRequest) -> Dict[str, Any]:
+    from backend import config
+    
+    # 1. Update runtime configuration
+    config.CAMERA_INDEX = settings.camera_index
+    config.CONFIDENCE_THRESHOLD = settings.confidence_threshold
+    config.DRAW_BOUNDING_BOXES = settings.draw_bounding_boxes
+    
+    # 2. Persist back to backend/.env
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        env_path = os.path.join(current_dir, ".env")
+        lines = []
+        if os.path.exists(env_path):
+            with open(env_path, "r") as f:
+                lines = f.readlines()
+                
+        new_lines = []
+        has_cam = False
+        has_thresh = False
+        has_bbox = False
+        for line in lines:
+            if line.strip().startswith("CAMERA_INDEX="):
+                new_lines.append(f"CAMERA_INDEX={settings.camera_index}\n")
+                has_cam = True
+            elif line.strip().startswith("CONFIDENCE_THRESHOLD="):
+                new_lines.append(f"CONFIDENCE_THRESHOLD={settings.confidence_threshold}\n")
+                has_thresh = True
+            elif line.strip().startswith("DRAW_BOUNDING_BOXES="):
+                new_lines.append(f"DRAW_BOUNDING_BOXES={'true' if settings.draw_bounding_boxes else 'false'}\n")
+                has_bbox = True
+            else:
+                new_lines.append(line)
+                
+        if not has_cam:
+            new_lines.append(f"CAMERA_INDEX={settings.camera_index}\n")
+        if not has_thresh:
+            new_lines.append(f"CONFIDENCE_THRESHOLD={settings.confidence_threshold}\n")
+        if not has_bbox:
+            new_lines.append(f"DRAW_BOUNDING_BOXES={'true' if settings.draw_bounding_boxes else 'false'}\n")
+            
+        with open(env_path, "w") as f:
+            f.writelines(new_lines)
+        logger.info("Persisted new settings to .env file successfully.")
+    except Exception as e:
+        logger.error(f"Failed to persist settings to .env file: {e}")
+        
+    # 3. Stop the active camera so it reopens with the new device next time
+    if camera.is_running:
+        logger.info("Stopping camera to apply new device configuration...")
+        camera.stop()
+        
+    return {
+        "status": "success",
+        "camera_index": config.CAMERA_INDEX,
+        "confidence_threshold": config.CONFIDENCE_THRESHOLD,
+        "draw_bounding_boxes": config.DRAW_BOUNDING_BOXES
+    }

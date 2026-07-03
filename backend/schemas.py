@@ -17,3 +17,14 @@ class CameraStatusResponse(BaseModel):
     confidence: float = Field(..., example=95.0, description="Average confidence score percentage")
     fps: float = Field(..., example=30.0, description="Frames per second of the capture process")
     faces: int = Field(..., example=1, description="Number of detected faces in the current frame")
+
+class SettingsRequest(BaseModel):
+    camera_index: int = Field(..., ge=0, description="Webcam device index")
+    confidence_threshold: float = Field(..., ge=0.0, le=100.0, description="Confidence threshold percentage")
+    draw_bounding_boxes: bool = Field(True, description="Whether to overlay bounding boxes on the camera feed")
+
+class SettingsResponse(BaseModel):
+    status: str
+    camera_index: int
+    confidence_threshold: float
+    draw_bounding_boxes: bool

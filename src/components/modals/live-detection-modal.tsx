@@ -11,9 +11,13 @@ import { Badge } from "@/components/ui/badge";
 import { Camera, CameraOff, Circle, ImageDown, Video } from "lucide-react";
 import { toast } from "sonner";
 
+import { BACKEND_URL } from "@/lib/backend";
+
 type Props = { open: boolean; onOpenChange: (v: boolean) => void };
 
-// Simple array of colors for emotions if we wanted to display badge variants dynamically
+const BACKEND = BACKEND_URL;
+
+
 const EMOTION_COLORS: Record<string, string> = {
   Angry: "bg-red-500/10 text-red-500 border-red-500/20",
   Disgusted: "bg-purple-500/10 text-purple-500 border-purple-500/20",
@@ -41,31 +45,32 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
   const [confidence, setConfidence] = useState(0);
   const [faces, setFaces] = useState(0);
   const [fps, setFps] = useState(0);
-  
+
   const pollingIntervalRef = useRef<any>(null);
 
   const startCamera = async () => {
     setStatus("Connecting");
     try {
-      const response = await fetch("http://localhost:8000/camera/start", {
+      const response = await fetch(`${BACKEND}/camera/start`, {
         method: "POST",
       });
       if (!response.ok) {
-        throw new Error("Failed to start camera");
+        const errData = await response.json().catch(() => ({ detail: "Unknown error" }));
+        throw new Error(errData.detail || `Server error ${response.status}`);
       }
       setIsStreaming(true);
       setStatus("Streaming");
-      toast.success("Camera feed started.");
-    } catch (err) {
+      toast.success("Webcam connected. Emotion detection active.");
+    } catch (err: any) {
       console.error("Error starting camera:", err);
       setStatus("Error");
-      toast.error("Could not access camera. Ensure the backend server is running.");
+      toast.error(`Camera error: ${err.message || "Could not connect to backend."}`);
     }
   };
 
   const stopCamera = async () => {
     try {
-      await fetch("http://localhost:8000/camera/stop", {
+      await fetch(`${BACKEND}/camera/stop`, {
         method: "POST",
       });
     } catch (err) {
@@ -93,32 +98,30 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
       toast.error("Webcam stream is not active.");
       return;
     }
-    
-    // Create an anchor and download snapshot
     const link = document.createElement("a");
-    link.href = `http://localhost:8000/camera/snapshot?t=${new Date().getTime()}`;
-    link.download = `EmotionSense_Capture_${new Date().getTime()}.jpg`;
+    link.href = `${BACKEND}/camera/snapshot?t=${Date.now()}`;
+    link.download = `EmotionSense_Capture_${Date.now()}.jpg`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     toast.success("Snapshot downloaded.");
   };
 
-  // Poll status endpoint
+  // Poll status endpoint every 500ms
   useEffect(() => {
     if (isStreaming && status === "Streaming") {
       pollingIntervalRef.current = setInterval(async () => {
         try {
-          const res = await fetch("http://localhost:8000/camera-status");
+          const res = await fetch(`${BACKEND}/camera-status`);
           if (res.ok) {
             const data = await res.json();
-            setEmotion(data.emotion);
-            setConfidence(data.confidence);
-            setFaces(data.faces);
-            setFps(data.fps);
+            setEmotion(data.emotion ?? "—");
+            setConfidence(data.confidence ?? 0);
+            setFaces(data.faces ?? 0);
+            setFps(data.fps ?? 0);
           }
-        } catch (err) {
-          console.error("Failed to fetch camera status:", err);
+        } catch {
+          // silently ignore transient polling errors
         }
       }, 500);
     } else {
@@ -127,15 +130,12 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
         pollingIntervalRef.current = null;
       }
     }
-
     return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-      }
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
     };
   }, [isStreaming, status]);
 
-  // Stop camera when closing modal
+  // Stop camera when modal closes
   useEffect(() => {
     if (!open) {
       if (isStreaming) {
@@ -145,8 +145,6 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
       }
     }
   }, [open]);
-
-  const emotionBadgeClass = emotion !== "—" ? EMOTION_COLORS[emotion] || "" : "";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -166,10 +164,10 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
           <div className="space-y-4">
             <div className="relative aspect-video w-full rounded-2xl border border-border/70 bg-secondary/60 overflow-hidden flex items-center justify-center">
               {isStreaming && status === "Streaming" ? (
-                <img 
-                  src="http://localhost:8000/video-feed" 
-                  className="h-full w-full object-cover" 
-                  alt="Live Webcam Feed" 
+                <img
+                  src={`${BACKEND}/video-feed`}
+                  className="h-full w-full object-cover"
+                  alt="Live Webcam Feed"
                   onError={() => {
                     toast.error("Stream interrupted.");
                     cleanupStream();
@@ -181,22 +179,35 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
                     <Camera className="h-6 w-6 text-muted-foreground" />
                   </div>
                   <p className="mt-3 text-sm text-muted-foreground">
-                    {status === "Connecting" ? "Initializing webcam..." : "Camera feed will appear here"}
+                    {status === "Connecting"
+                      ? "Initializing webcam..."
+                      : status === "Error"
+                      ? "Camera error — ensure the backend is running"
+                      : "Click Start Camera to begin"}
                   </p>
                 </div>
               )}
+              {/* Status indicator overlay */}
               <div className="absolute left-4 top-4 flex items-center gap-2 rounded-full bg-background/80 px-3 py-1 text-xs backdrop-blur">
-                <Circle 
+                <Circle
                   className={`h-2 w-2 ${
-                    status === "Streaming" 
-                      ? "fill-green-500 text-green-500" 
-                      : status === "Connecting" 
-                      ? "fill-yellow-500 text-yellow-500" 
+                    status === "Streaming"
+                      ? "fill-green-500 text-green-500"
+                      : status === "Connecting"
+                      ? "fill-yellow-500 text-yellow-500"
+                      : status === "Error"
+                      ? "fill-red-500 text-red-500"
                       : "fill-muted-foreground text-muted-foreground"
-                  }`} 
+                  }`}
                 />
                 <span className="text-muted-foreground">
-                  {status === "Streaming" ? "Active" : status === "Connecting" ? "Connecting" : "Idle"}
+                  {status === "Streaming"
+                    ? "Active"
+                    : status === "Connecting"
+                    ? "Connecting…"
+                    : status === "Error"
+                    ? "Error"
+                    : "Idle"}
                 </span>
               </div>
             </div>
@@ -206,7 +217,9 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
                 <span className="text-xs text-muted-foreground">Last 30s</span>
               </div>
               <div className="h-20 rounded-xl bg-secondary/60 flex items-center justify-center text-xs text-muted-foreground">
-                Timeline visualization (Standard Placeholder)
+                {isStreaming
+                  ? `Detecting — ${emotion} (${Math.round(confidence)}% confidence)`
+                  : "Start camera to see timeline"}
               </div>
             </div>
           </div>
@@ -219,7 +232,7 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
                 {emotion}
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
-                {emotion !== "—" ? `Primary detected emotion` : "Awaiting input"}
+                {emotion !== "—" ? "Primary detected emotion" : "Awaiting input"}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -230,13 +243,23 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
                 <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
                   Status
                 </div>
-                <Badge 
-                  variant={status === "Streaming" ? "default" : "secondary"} 
+                <Badge
+                  variant={status === "Streaming" ? "default" : "secondary"}
                   className={`mt-2 rounded-full font-normal ${
-                    status === "Streaming" ? "bg-green-500/10 text-green-500 border-green-500/20" : ""
+                    status === "Streaming"
+                      ? "bg-green-500/10 text-green-500 border-green-500/20"
+                      : status === "Error"
+                      ? "bg-red-500/10 text-red-500 border-red-500/20"
+                      : ""
                   }`}
                 >
-                  {status === "Streaming" ? "Connected" : status === "Connecting" ? "Connecting" : "Disconnected"}
+                  {status === "Streaming"
+                    ? "Connected"
+                    : status === "Connecting"
+                    ? "Connecting…"
+                    : status === "Error"
+                    ? "Error"
+                    : "Disconnected"}
                 </Badge>
               </div>
             </div>
@@ -246,25 +269,25 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
           <Button variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <Button 
-            variant="outline" 
-            className="rounded-xl" 
-            onClick={captureSnapshot} 
+          <Button
+            variant="outline"
+            className="rounded-xl"
+            onClick={captureSnapshot}
             disabled={!isStreaming || status !== "Streaming"}
           >
             <ImageDown className="h-4 w-4" /> Capture
           </Button>
-          <Button 
-            variant="outline" 
-            className="rounded-xl" 
-            onClick={stopCamera} 
+          <Button
+            variant="outline"
+            className="rounded-xl"
+            onClick={stopCamera}
             disabled={!isStreaming}
           >
             <CameraOff className="h-4 w-4" /> Stop
           </Button>
-          <Button 
-            className="rounded-xl" 
-            onClick={startCamera} 
+          <Button
+            className="rounded-xl"
+            onClick={startCamera}
             disabled={isStreaming || status === "Connecting"}
           >
             <Camera className="h-4 w-4" /> Start Camera

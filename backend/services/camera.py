@@ -8,9 +8,7 @@ from typing import Generator, Optional, Tuple, Dict, Any
 import numpy as np
 
 from backend import config
-from backend.services.detector import FaceDetector
-from backend.services.predictor import EmotionPredictor
-from backend.services.utils import EmotionSmoother, BoundingBoxSmoother
+from backend.services.advanced_emotion import EmotionEngine
 
 logger = logging.getLogger("backend.services.camera")
 
@@ -85,10 +83,7 @@ class VideoCamera:
             return
         self._initialized = True
         
-        self.detector = FaceDetector()
-        self.predictor = EmotionPredictor()
-        self.emotion_smoother = EmotionSmoother(alpha=config.EMA_ALPHA, min_consecutive=2)
-        self.bbox_smoother = BoundingBoxSmoother(window_size=5)
+        self.emotion_engine = EmotionEngine()
         
         self.cap: Optional[cv2.VideoCapture] = None
         self.mjpeg_reader: Optional[MjpegReader] = None
@@ -108,55 +103,57 @@ class VideoCamera:
 
     def start(self) -> bool:
         """
-        Starts the webcam and the background frame reader thread.
-        Prefers CAMERA_URL (e.g. DroidCam WiFi) over CAMERA_INDEX if set.
+        Starts the local webcam and the background frame reader thread.
+        Tries CAMERA_INDEX first, then auto-falls back to the other index.
         """
         with self._lock:
             if self.is_running:
                 logger.info("Camera is already running.")
                 return True
-            
-            camera_url = getattr(config, 'CAMERA_URL', None)
+
             camera_index = config.CAMERA_INDEX
+            logger.info(f"Starting VideoCamera with index {camera_index}...")
 
-            if camera_url:
-                logger.info(f"Starting VideoCamera with MJPEG URL: {camera_url}")
-                reader = MjpegReader(camera_url)
-                if not reader.open():
-                    logger.error(f"Could not open MJPEG stream: {camera_url}")
-                    self.is_running = False
-                    return False
-                self.mjpeg_reader = reader
-                self.cap = None
-            else:
-                logger.info(f"Starting VideoCamera with index {camera_index}...")
-                if camera_index == 0:
-                    self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-                    if not self.cap.isOpened():
-                        self.cap = cv2.VideoCapture(camera_index)
-                else:
-                    self.cap = cv2.VideoCapture(camera_index)
-                    if not self.cap.isOpened():
-                        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-                
+            # Try DirectShow backend first (Windows), then default
+            self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+            if not self.cap.isOpened():
+                self.cap = cv2.VideoCapture(camera_index)
+
+            # Auto-fallback: try the other index if still not open
+            if not self.cap.isOpened():
+                fallback = 1 if camera_index == 0 else 0
+                logger.warning(f"Index {camera_index} failed. Trying fallback index {fallback}...")
+                self.cap = cv2.VideoCapture(fallback, cv2.CAP_DSHOW)
                 if not self.cap.isOpened():
-                    logger.error(f"Webcam (index {camera_index}) could not be opened.")
-                    self.is_running = False
-                    return False
+                    self.cap = cv2.VideoCapture(fallback)
 
-            
+            if not self.cap.isOpened():
+                logger.error("No webcam could be opened on index 0 or 1.")
+                self.cap = None
+                self.is_running = False
+                return False
+
+            self.mjpeg_reader = None
             self.is_running = True
-            # Reset smoothers
-            self.emotion_smoother.reset()
-            self.bbox_smoother.reset()
-            
+
+            # Safe tracker reset
+            try:
+                tracker_cls = type(self.emotion_engine.tracker)
+                eng_cfg = self.emotion_engine.config
+                self.emotion_engine.tracker = tracker_cls(
+                    max_disappeared=eng_cfg.TRACKER_MAX_DISAPPEARED,
+                    max_distance=eng_cfg.TRACKER_MAX_DISTANCE,
+                )
+            except Exception as e:
+                logger.warning(f"Could not reset tracker: {e}")
+
             self.current_emotion = "Neutral"
             self.confidence = 0.0
             self.faces_count = 0
             self.fps = 0.0
             self.latest_frame = None
             self.frame_counter = 0
-            
+
             self.thread = threading.Thread(target=self._capture_loop, daemon=True)
             self.thread.start()
             logger.info("VideoCamera background thread started successfully.")
@@ -231,64 +228,27 @@ class VideoCamera:
             avg_bgr = frame.mean(axis=(0, 1))
             logger.info(f"Frame {self.frame_counter} stats - Shape: {frame.shape}, Avg BGR: {avg_bgr}")
             
-        # Face detection (returns BGR crop and original bounding box)
-        faces = self.detector.detect_faces(frame)
-        self.faces_count = len(faces)
+        # Run Advanced Emotion Engine detection, tracking, and prediction
+        draw_bbox = getattr(config, 'DRAW_BOUNDING_BOXES', True)
+        annotated_frame, face_predictions = self.emotion_engine.process_frame(
+            frame=frame,
+            draw_overlays=draw_bbox,
+            frame_counter=self.frame_counter,
+            frame_skip=config.FRAME_SKIP
+        )
         
+        self.faces_count = len(face_predictions)
         if self.faces_count > 0:
-            # Select primary (largest) face
-            primary_face = max(faces, key=lambda f: f[0][2] * f[0][3])
-            (x, y, w, h), aligned_crop = primary_face
-            
-            # Smooth bounding box coordinates
-            sx, sy, sw, sh = self.bbox_smoother.smooth((x, y, w, h))
-            
-            # Run prediction every N frames (configured via FRAME_SKIP)
-            frame_skip = config.FRAME_SKIP
-            if self.frame_counter % frame_skip == 0 or self.current_emotion == "Neutral":
-                if aligned_crop is not None and aligned_crop.size > 0:
-                    try:
-                        raw_probs = self.predictor.predict_probabilities(aligned_crop)
-                        self.current_emotion, self.confidence, _ = self.emotion_smoother.process(raw_probs)
-                    except Exception as e:
-                        logger.error(f"Error during ONNX emotion prediction: {e}")
-            
-            # Render a modern vibrant teal bounding box (BGR: (230, 216, 0))
-            cv2.rectangle(frame, (sx, sy), (sx + sw, sy + sh), (230, 216, 0), 2)
-            
-            # Apply confidence threshold for overlay display
-            display_emotion = self.current_emotion
-            if self.confidence < config.CONFIDENCE_THRESHOLD:
-                display_emotion = "Emotion Uncertain"
-                
-            # Draw premium label overlay
-            label = f"{display_emotion} ({int(self.confidence)}%)"
-            
-            # Filled header bar for label
-            bar_height = 30
-            cv2.rectangle(frame, (sx, sy - bar_height), (sx + sw, sy), (230, 216, 0), cv2.FILLED)
-            
-            # Label text
-            cv2.putText(
-                frame, 
-                label, 
-                (sx + 8, sy - 8), 
-                cv2.FONT_HERSHEY_SIMPLEX, 
-                0.6, 
-                (0, 0, 0), 
-                2, 
-                cv2.LINE_AA
-            )
+            # Use the primary (largest) face for global camera status dashboard statistics
+            primary = max(face_predictions, key=lambda f: f["bbox"][2] * f["bbox"][3])
+            self.current_emotion = primary["emotion"]
+            self.confidence = primary["confidence"]
         else:
-            self.bbox_smoother.reset()
-            # Decay the predicted state back to neutral if no faces are detected
-            if self.frame_counter % 5 == 0:
-                self.emotion_smoother.reset()
-                self.current_emotion = "Neutral"
-                self.confidence = 0.0
-
+            self.current_emotion = "Neutral"
+            self.confidence = 0.0
+            
         with self._frame_lock:
-            self.latest_frame = frame.copy()
+            self.latest_frame = annotated_frame.copy()
 
     def get_frame_bytes(self) -> Optional[bytes]:
         """
