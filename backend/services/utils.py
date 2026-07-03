@@ -1,53 +1,88 @@
-from collections import Counter
-import collections
-from typing import List, Tuple, Optional
+from collections import deque
+from typing import List, Tuple, Dict, Optional
 from backend import config
 
 class EmotionSmoother:
-    def __init__(self, window_size: int = 10, confidence_threshold: Optional[float] = None) -> None:
-        self.window_size = window_size
-        self.confidence_threshold = confidence_threshold if confidence_threshold is not None else config.CONFIDENCE_THRESHOLD
-        self.history = collections.deque(maxlen=window_size)
-        self.last_stable_emotion: str = "Neutral"
-        self.last_stable_confidence: float = 0.0
+    """
+    Stabilizes predictions by:
+    1. Applying Exponential Moving Average (EMA) to class probabilities.
+    2. Enforcing consecutive frame confirmation before changing the dominant emotion.
+    """
+    def __init__(self, alpha: float = 0.3, min_consecutive: int = 3) -> None:
+        self.alpha = alpha
+        self.min_consecutive = min_consecutive
+        
+        self.smoothed_probs: Dict[str, float] = {}
+        self.current_emotion: str = "Neutral"
+        self.current_confidence: float = 0.0
+        
+        # Confirmation tracking
+        self.pending_emotion: Optional[str] = None
+        self.consecutive_count: int = 0
 
-    def add_prediction(self, emotion: str, confidence: float) -> Tuple[str, float]:
+    def process(self, raw_probs: Dict[str, float]) -> Tuple[str, float, Dict[str, float]]:
         """
-        Adds a new prediction to the history if it passes the confidence threshold.
-        Returns the current stable emotion and its average confidence.
+        Processes a raw frame's prediction probabilities, updates the EMA state,
+        runs consecutive frame confirmation, and returns:
+        (stable_dominant_emotion, stable_confidence, smoothed_probabilities_dict)
         """
-        if confidence >= self.confidence_threshold:
-            self.history.append((emotion, confidence))
-            
-        if self.history:
-            emotions_in_history = [item[0] for item in self.history]
-            counter = Counter(emotions_in_history)
-            dominant_emotion, count = counter.most_common(1)[0]
-            
-            matching_confidences = [item[1] for item in self.history if item[0] == dominant_emotion]
-            avg_confidence = sum(matching_confidences) / len(matching_confidences)
-            
-            self.last_stable_emotion = dominant_emotion
-            self.last_stable_confidence = avg_confidence
-            
-        return self.last_stable_emotion, self.last_stable_confidence
+        if not raw_probs:
+            return self.current_emotion, self.current_confidence, self.smoothed_probs
 
-    def get_stable_prediction(self) -> Tuple[str, float]:
-        return self.last_stable_emotion, self.last_stable_confidence
+        # 1. Apply EMA smoothing
+        if not self.smoothed_probs:
+            self.smoothed_probs = {k: v for k, v in raw_probs.items()}
+        else:
+            for k, v in raw_probs.items():
+                if k in self.smoothed_probs:
+                    self.smoothed_probs[k] = self.alpha * v + (1 - self.alpha) * self.smoothed_probs[k]
+                else:
+                    self.smoothed_probs[k] = v
+
+        # 2. Get dominant candidate from smoothed probabilities
+        dominant_candidate = max(self.smoothed_probs, key=self.smoothed_probs.get)
+        confidence_candidate = self.smoothed_probs[dominant_candidate]
+
+        # 3. Apply consecutive frame confirmation
+        if dominant_candidate == self.current_emotion:
+            # Reset confirmation when candidate matches current stable state
+            self.current_confidence = confidence_candidate
+            self.pending_emotion = None
+            self.consecutive_count = 0
+        else:
+            if dominant_candidate == self.pending_emotion:
+                self.consecutive_count += 1
+            else:
+                self.pending_emotion = dominant_candidate
+                self.consecutive_count = 1
+
+            if self.consecutive_count >= self.min_consecutive:
+                # Confirmed switch
+                self.current_emotion = dominant_candidate
+                self.current_confidence = confidence_candidate
+                self.pending_emotion = None
+                self.consecutive_count = 0
+
+        return self.current_emotion, self.current_confidence, self.smoothed_probs
 
     def reset(self) -> None:
-        self.history.clear()
+        self.smoothed_probs.clear()
+        self.current_emotion = "Neutral"
+        self.current_confidence = 0.0
+        self.pending_emotion = None
+        self.consecutive_count = 0
 
 
 class BoundingBoxSmoother:
+    """
+    A simple moving average filter to smooth bounding box coordinates
+    and eliminate jitter in video rendering.
+    """
     def __init__(self, window_size: int = 5) -> None:
         self.window_size = window_size
-        self.history = collections.deque(maxlen=window_size)
+        self.history = deque(maxlen=window_size)
 
     def smooth(self, bbox: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
-        """
-        Appends the latest bounding box coordinates and returns the average.
-        """
         self.history.append(bbox)
         
         avg_x = int(sum(b[0] for b in self.history) / len(self.history))

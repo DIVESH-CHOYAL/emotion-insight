@@ -31,8 +31,8 @@ class VideoCamera:
         
         self.detector = FaceDetector()
         self.predictor = EmotionPredictor()
-        self.emotion_smoother = EmotionSmoother()
-        self.bbox_smoother = BoundingBoxSmoother()
+        self.emotion_smoother = EmotionSmoother(alpha=config.EMA_ALPHA, min_consecutive=2)
+        self.bbox_smoother = BoundingBoxSmoother(window_size=5)
         
         self.cap: Optional[cv2.VideoCapture] = None
         self.thread: Optional[threading.Thread] = None
@@ -143,57 +143,60 @@ class VideoCamera:
 
     def _process_frame(self, frame: np.ndarray) -> None:
         self.frame_counter += 1
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Face detection
-        faces = self.detector.detect_faces(gray)
+        # Face detection (returns BGR crop and original bounding box)
+        faces = self.detector.detect_faces(frame)
         self.faces_count = len(faces)
         
         if self.faces_count > 0:
-            primary_face = max(faces, key=lambda f: f[2] * f[3])
-            x, y, w, h = primary_face
+            # Select primary (largest) face
+            primary_face = max(faces, key=lambda f: f[0][2] * f[0][3])
+            (x, y, w, h), aligned_crop = primary_face
             
-            # Smooth bounding box
-            sx, sy, sw, sh = self.bbox_smoother.smooth(primary_face)
+            # Smooth bounding box coordinates
+            sx, sy, sw, sh = self.bbox_smoother.smooth((x, y, w, h))
             
-            # Run CNN inference according to configuration
+            # Run prediction every N frames (configured via FRAME_SKIP)
             frame_skip = config.FRAME_SKIP
             if self.frame_counter % frame_skip == 0 or self.current_emotion == "Neutral":
-                img_h, img_w = gray.shape
-                cx = max(0, x)
-                cy = max(0, y)
-                cw = min(w, img_w - cx)
-                ch = min(h, img_h - cy)
-                
-                if cw > 0 and ch > 0:
-                    roi_gray = gray[cy:cy+ch, cx:cx+cw]
+                if aligned_crop is not None and aligned_crop.size > 0:
                     try:
-                        emotion, raw_confidence = self.predictor.predict_emotion(roi_gray)
-                        self.current_emotion, self.confidence = self.emotion_smoother.add_prediction(
-                            emotion, raw_confidence
-                        )
+                        raw_probs = self.predictor.predict_probabilities(aligned_crop)
+                        self.current_emotion, self.confidence, _ = self.emotion_smoother.process(raw_probs)
                     except Exception as e:
-                        logger.error(f"Error during CNN emotion prediction: {e}")
+                        logger.error(f"Error during ONNX emotion prediction: {e}")
             
-            # Draw smoothed bounding box (Blue rectangle)
-            cv2.rectangle(frame, (sx, sy - 50), (sx + sw, sy + sh + 10), (255, 0, 0), 2)
+            # Render a modern vibrant teal bounding box (BGR: (230, 216, 0))
+            cv2.rectangle(frame, (sx, sy), (sx + sw, sy + sh), (230, 216, 0), 2)
             
-            # Draw label
-            label = f"{self.current_emotion} ({int(self.confidence)}%)"
+            # Apply confidence threshold for overlay display
+            display_emotion = self.current_emotion
+            if self.confidence < config.CONFIDENCE_THRESHOLD:
+                display_emotion = "Emotion Uncertain"
+                
+            # Draw premium label overlay
+            label = f"{display_emotion} ({int(self.confidence)}%)"
+            
+            # Filled header bar for label
+            bar_height = 30
+            cv2.rectangle(frame, (sx, sy - bar_height), (sx + sw, sy), (230, 216, 0), cv2.FILLED)
+            
+            # Label text
             cv2.putText(
                 frame, 
                 label, 
-                (sx + 10, sy - 60), 
+                (sx + 8, sy - 8), 
                 cv2.FONT_HERSHEY_SIMPLEX, 
-                0.8, 
-                (255, 255, 255), 
+                0.6, 
+                (0, 0, 0), 
                 2, 
                 cv2.LINE_AA
             )
         else:
             self.bbox_smoother.reset()
-            self.faces_count = 0
-            if self.frame_counter % 10 == 0:
+            # Decay the predicted state back to neutral if no faces are detected
+            if self.frame_counter % 5 == 0:
+                self.emotion_smoother.reset()
                 self.current_emotion = "Neutral"
                 self.confidence = 0.0
 
@@ -216,9 +219,14 @@ class VideoCamera:
         Returns camera status metrics.
         """
         status_str = "Running" if self.is_running else "Stopped"
+        
+        emotion = self.current_emotion
+        if self.is_running and self.confidence < config.CONFIDENCE_THRESHOLD:
+            emotion = "Emotion Uncertain"
+            
         return {
             "camera": status_str,
-            "emotion": self.current_emotion if self.is_running else "—",
+            "emotion": emotion if self.is_running else "—",
             "confidence": round(self.confidence, 1) if self.is_running else 0.0,
             "fps": round(self.fps, 1) if self.is_running else 0.0,
             "faces": self.faces_count if self.is_running else 0

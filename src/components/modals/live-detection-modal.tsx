@@ -22,6 +22,7 @@ const EMOTION_COLORS: Record<string, string> = {
   Neutral: "bg-blue-500/10 text-blue-500 border-blue-500/20",
   Sad: "bg-indigo-500/10 text-indigo-500 border-indigo-500/20",
   Surprised: "bg-pink-500/10 text-pink-500 border-pink-500/20",
+  "Emotion Uncertain": "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
 };
 
 function Metric({ label, value }: { label: string; value: string }) {

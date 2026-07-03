@@ -74,31 +74,24 @@ async def predict_image(file: UploadFile = File(...)) -> schemas.PredictionRespo
                 detail="Could not decode image."
             )
 
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Detect faces
-        faces = image_detector.detect_faces(gray)
-        if not faces:
+        # Detect faces (MediaPipe works on color BGR images)
+        faces_data = image_detector.detect_faces(img)
+        if not faces_data:
             logger.info("No faces detected in the uploaded image.")
             return schemas.PredictionResponse(face_detected=False)
 
-        # Select the primary (largest) face
-        primary_face = max(faces, key=lambda f: f[2] * f[3])
-        x, y, w, h = primary_face
+        # Select the primary (largest) face based on bounding box size
+        primary_face = max(faces_data, key=lambda f: f[0][2] * f[0][3])
+        (x, y, w, h), aligned_crop = primary_face
         
-        img_h, img_w = gray.shape
-        cx = max(0, x)
-        cy = max(0, y)
-        cw = min(w, img_w - cx)
-        ch = min(h, img_h - cy)
+        # Predict using the aligned crop BGR image
+        emotion, confidence = image_predictor.predict_emotion(aligned_crop)
+        probabilities = image_predictor.predict_probabilities(aligned_crop)
         
-        if cw <= 0 or ch <= 0:
-            return schemas.PredictionResponse(face_detected=False)
-            
-        roi_gray = gray[cy:cy+ch, cx:cx+cw]
-        emotion, confidence = image_predictor.predict_emotion(roi_gray)
-        probabilities = image_predictor.predict_probabilities(roi_gray)
+        # Apply adaptive confidence threshold
+        from backend.config import CONFIDENCE_THRESHOLD
+        if confidence < CONFIDENCE_THRESHOLD:
+            emotion = "Emotion Uncertain"
         
         logger.info(f"Image prediction successful: {emotion} ({confidence:.1f}%)")
         return schemas.PredictionResponse(
@@ -117,6 +110,7 @@ async def predict_image(file: UploadFile = File(...)) -> schemas.PredictionRespo
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Prediction failure: {str(e)}"
         )
+
 
 @router.get(
     "/video-feed",

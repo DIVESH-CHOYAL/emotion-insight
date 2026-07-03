@@ -11,7 +11,7 @@ else:
 
 # Paths
 # Default to models/ relative to backend/ root
-MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(current_dir, "models", "emotion_model.h5"))
+MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(current_dir, "models", "emotion_model.onnx"))
 CASCADE_PATH = os.getenv("CASCADE_PATH", os.path.join(current_dir, "models", "haarcascade_frontalface_default.xml"))
 
 # Resolve absolute paths if they are specified relatively
@@ -36,6 +36,11 @@ try:
 except ValueError:
     FRAME_SKIP = 3
 
+try:
+    EMA_ALPHA = float(os.getenv("EMA_ALPHA", "0.3"))
+except ValueError:
+    EMA_ALPHA = 0.3
+
 # Server configs
 HOST = os.getenv("HOST", "127.0.0.1")
 try:
@@ -46,3 +51,4 @@ except ValueError:
 # CORS Allowed Origins (list of strings)
 origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")
 ALLOWED_ORIGINS = [o.strip() for o in origins_raw.split(",") if o.strip()]
+
