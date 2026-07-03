@@ -94,6 +94,7 @@ class VideoCamera:
         self.mjpeg_reader: Optional[MjpegReader] = None
         self.thread: Optional[threading.Thread] = None
         self.is_running = False
+        self._frame_lock = threading.Lock()
         
         # State metrics
         self.current_emotion = "Neutral"
@@ -226,6 +227,10 @@ class VideoCamera:
     def _process_frame(self, frame: np.ndarray) -> None:
         self.frame_counter += 1
         
+        if self.frame_counter <= 5:
+            avg_bgr = frame.mean(axis=(0, 1))
+            logger.info(f"Frame {self.frame_counter} stats - Shape: {frame.shape}, Avg BGR: {avg_bgr}")
+            
         # Face detection (returns BGR crop and original bounding box)
         faces = self.detector.detect_faces(frame)
         self.faces_count = len(faces)
@@ -282,16 +287,19 @@ class VideoCamera:
                 self.current_emotion = "Neutral"
                 self.confidence = 0.0
 
-        self.latest_frame = frame
+        with self._frame_lock:
+            self.latest_frame = frame.copy()
 
     def get_frame_bytes(self) -> Optional[bytes]:
         """
         Encodes the latest processed frame to JPEG and returns the bytes.
         """
-        if self.latest_frame is None:
-            return None
+        with self._frame_lock:
+            if self.latest_frame is None:
+                return None
+            frame_to_encode = self.latest_frame.copy()
         
-        ret, jpeg = cv2.imencode('.jpg', self.latest_frame)
+        ret, jpeg = cv2.imencode('.jpg', frame_to_encode)
         if not ret:
             return None
         return jpeg.tobytes()

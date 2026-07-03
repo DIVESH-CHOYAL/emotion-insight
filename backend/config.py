@@ -26,6 +26,10 @@ try:
 except ValueError:
     CAMERA_INDEX = 0
 
+# Optional: override with a stream URL (e.g. DroidCam WiFi: http://IP:4747/video)
+# Leave blank to use CAMERA_INDEX instead.
+CAMERA_URL = os.getenv("CAMERA_URL", "").strip() or None
+
 try:
     CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "70.0"))
 except ValueError:
