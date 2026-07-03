@@ -73,19 +73,4 @@ def shutdown_event():
     logger.info("Cleanup complete.")
 
 if __name__ == "__main__":
-    ssl_key = getattr(config, "SSL_KEYFILE", None)
-    ssl_cert = getattr(config, "SSL_CERTFILE", None)
-    
-    if ssl_key and ssl_cert:
-        logger.info(f"Starting server with HTTPS (SSL Enabled) using cert: {ssl_cert}")
-        uvicorn.run(
-            "backend.app:app", 
-            host=config.HOST, 
-            port=config.PORT, 
-            reload=True, 
-            ssl_keyfile=ssl_key, 
-            ssl_certfile=ssl_cert
-        )
-    else:
-        logger.info("Starting server with HTTP (SSL Disabled)")
-        uvicorn.run("backend.app:app", host=config.HOST, port=config.PORT, reload=True)
+    uvicorn.run("backend.app:app", host=config.HOST, port=config.PORT, reload=True)
