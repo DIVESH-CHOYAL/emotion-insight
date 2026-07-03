@@ -1,19 +1,15 @@
 import os
 import cv2
 import numpy as np
+import urllib.request
 from backend.services.detector import FaceDetector
 from backend.services.predictor import EmotionPredictor
-from backend.services.model_loader import ModelLoader
 
 def test_pipeline():
     # 1. Initialize services
-    print("Testing ModelLoader...")
-    session = ModelLoader.get_model()
-    assert session is not None, "ModelLoader failed to load ONNX session"
-    
     print("Testing EmotionPredictor...")
     predictor = EmotionPredictor()
-    assert predictor.session is not None
+    assert predictor.fer is not None
     
     print("Testing FaceDetector...")
     detector = FaceDetector()

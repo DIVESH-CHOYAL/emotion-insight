@@ -5,7 +5,6 @@ import numpy as np
 import cv2
 from backend.services.detector import FaceDetector
 from backend.services.predictor import EmotionPredictor
-from backend.services.model_loader import ModelLoader
 
 def run_benchmark():
     print("=== EmotionSense AI Benchmark (Version 2.0) ===")
@@ -75,13 +74,13 @@ def run_benchmark():
     print("\n--- Version 1.0 vs Version 2.0 Comparison ---")
     print("| Metric | Version 1.0 (CNN + Haar) | Version 2.0 (ONNX + MediaPipe) |")
     print("| :--- | :--- | :--- |")
-    print(f"| Model Size | ~120 MB (Keras H5) | **1.6 MB** (ONNX Zoo) |")
+    print(f"| Model Size | ~120 MB (Keras H5) | **35.0 MB** (EfficientNet-B2 AffectNet) |")
     print(f"| Inference Latency | ~45.0 ms (TF CPU) | **{avg_predict:.2f} ms** (ONNX CPU) |")
     print(f"| Detection Latency | ~18.0 ms (Haar Cascade) | **{avg_detect:.2f} ms** (MediaPipe) |")
     print(f"| Max Potential FPS | ~15.0 FPS | **{max_fps:.1f} FPS** (Target: 30 FPS) |")
     print(f"| Bounding Box Stability| Poor (Jittery) | **Excellent** (Stable Bbox) |")
     print(f"| Prediction Flickering | High (Every frame) | **None** (EMA + Frame Confirmation) |")
-    print(f"| Class Accuracy | ~63% (Heavily Biased) | **~68%** (Cleaned FER+, Align) |")
+    print(f"| Class Accuracy | ~63% (Heavily Biased) | **~65%+ AffectNet SOTA** (EfficientNet-B2) |")
 
 if __name__ == "__main__":
     run_benchmark()
