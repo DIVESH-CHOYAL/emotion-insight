@@ -49,6 +49,14 @@ except ValueError:
     PORT = 8000
 
 # CORS Allowed Origins (list of strings)
-origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")
+origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173,http://localhost:8080,https://localhost:3000,https://localhost:5173,https://localhost:8080")
 ALLOWED_ORIGINS = [o.strip() for o in origins_raw.split(",") if o.strip()]
+
+# SSL Configuration
+SSL_KEYFILE = os.path.join(current_dir, "key.pem")
+SSL_CERTFILE = os.path.join(current_dir, "cert.pem")
+
+if not os.path.exists(SSL_KEYFILE) or not os.path.exists(SSL_CERTFILE):
+    SSL_KEYFILE = None
+    SSL_CERTFILE = None
 

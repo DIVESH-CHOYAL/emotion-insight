@@ -81,7 +81,7 @@ export function UploadImageModal({ open, onOpenChange }: Props) {
     formData.append("file", selectedFile);
 
     try {
-      const res = await fetch("http://localhost:8000/predict-image", {
+      const res = await fetch("https://localhost:8000/predict-image", {
         method: "POST",
         body: formData,
       });

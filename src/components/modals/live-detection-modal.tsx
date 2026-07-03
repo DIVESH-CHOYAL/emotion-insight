@@ -47,7 +47,7 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
   const startCamera = async () => {
     setStatus("Connecting");
     try {
-      const response = await fetch("http://localhost:8000/camera/start", {
+      const response = await fetch("https://localhost:8000/camera/start", {
         method: "POST",
       });
       if (!response.ok) {
@@ -65,7 +65,7 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
 
   const stopCamera = async () => {
     try {
-      await fetch("http://localhost:8000/camera/stop", {
+      await fetch("https://localhost:8000/camera/stop", {
         method: "POST",
       });
     } catch (err) {
@@ -96,7 +96,7 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
     
     // Create an anchor and download snapshot
     const link = document.createElement("a");
-    link.href = `http://localhost:8000/camera/snapshot?t=${new Date().getTime()}`;
+    link.href = `https://localhost:8000/camera/snapshot?t=${new Date().getTime()}`;
     link.download = `EmotionSense_Capture_${new Date().getTime()}.jpg`;
     document.body.appendChild(link);
     link.click();
@@ -109,7 +109,7 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
     if (isStreaming && status === "Streaming") {
       pollingIntervalRef.current = setInterval(async () => {
         try {
-          const res = await fetch("http://localhost:8000/camera-status");
+          const res = await fetch("https://localhost:8000/camera-status");
           if (res.ok) {
             const data = await res.json();
             setEmotion(data.emotion);
@@ -167,7 +167,7 @@ export function LiveDetectionModal({ open, onOpenChange }: Props) {
             <div className="relative aspect-video w-full rounded-2xl border border-border/70 bg-secondary/60 overflow-hidden flex items-center justify-center">
               {isStreaming && status === "Streaming" ? (
                 <img 
-                  src="http://localhost:8000/video-feed" 
+                  src="https://localhost:8000/video-feed" 
                   className="h-full w-full object-cover" 
                   alt="Live Webcam Feed" 
                   onError={() => {
