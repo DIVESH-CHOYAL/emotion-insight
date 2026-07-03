@@ -3,6 +3,7 @@ import collections
 import threading
 import time
 import logging
+import urllib.request
 from typing import Generator, Optional, Tuple, Dict, Any
 import numpy as np
 
@@ -12,6 +13,61 @@ from backend.services.predictor import EmotionPredictor
 from backend.services.utils import EmotionSmoother, BoundingBoxSmoother
 
 logger = logging.getLogger("backend.services.camera")
+
+
+class MjpegReader:
+    """
+    Reads JPEG frames from a multipart MJPEG HTTP stream (e.g. DroidCam WiFi).
+    Works where cv2.VideoCapture cannot open the HTTP URL.
+    """
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self._stream = None
+        self._buf = b""
+
+    def open(self) -> bool:
+        try:
+            req = urllib.request.Request(
+                self.url,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            self._stream = urllib.request.urlopen(req, timeout=5)
+            self._buf = b""
+            logger.info(f"MjpegReader: opened stream {self.url}")
+            return True
+        except Exception as e:
+            logger.error(f"MjpegReader: cannot open {self.url}: {e}")
+            return False
+
+    def read(self):
+        """Returns (True, frame_ndarray) or (False, None)."""
+        try:
+            while True:
+                chunk = self._stream.read(4096)
+                if not chunk:
+                    return False, None
+                self._buf += chunk
+                # Find JPEG start and end markers
+                start = self._buf.find(b"\xff\xd8")
+                end = self._buf.find(b"\xff\xd9")
+                if start != -1 and end != -1 and end > start:
+                    jpg_bytes = self._buf[start:end + 2]
+                    self._buf = self._buf[end + 2:]
+                    arr = np.frombuffer(jpg_bytes, dtype=np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        return True, frame
+        except Exception as e:
+            logger.error(f"MjpegReader.read error: {e}")
+            return False, None
+
+    def release(self):
+        try:
+            if self._stream:
+                self._stream.close()
+                self._stream = None
+        except Exception:
+            pass
 
 class VideoCamera:
     _instance: Optional['VideoCamera'] = None
@@ -35,6 +91,7 @@ class VideoCamera:
         self.bbox_smoother = BoundingBoxSmoother(window_size=5)
         
         self.cap: Optional[cv2.VideoCapture] = None
+        self.mjpeg_reader: Optional[MjpegReader] = None
         self.thread: Optional[threading.Thread] = None
         self.is_running = False
         
@@ -51,24 +108,41 @@ class VideoCamera:
     def start(self) -> bool:
         """
         Starts the webcam and the background frame reader thread.
+        Prefers CAMERA_URL (e.g. DroidCam WiFi) over CAMERA_INDEX if set.
         """
         with self._lock:
             if self.is_running:
                 logger.info("Camera is already running.")
                 return True
             
+            camera_url = getattr(config, 'CAMERA_URL', None)
             camera_index = config.CAMERA_INDEX
-            logger.info(f"Starting VideoCamera with index {camera_index}...")
-            
-            # Try camera index with DirectShow for fast startup on Windows
-            self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-            if not self.cap.isOpened():
-                # Fallback without CAP_DSHOW
-                self.cap = cv2.VideoCapture(camera_index)
+
+            if camera_url:
+                logger.info(f"Starting VideoCamera with MJPEG URL: {camera_url}")
+                reader = MjpegReader(camera_url)
+                if not reader.open():
+                    logger.error(f"Could not open MJPEG stream: {camera_url}")
+                    self.is_running = False
+                    return False
+                self.mjpeg_reader = reader
+                self.cap = None
+            else:
+                logger.info(f"Starting VideoCamera with index {camera_index}...")
+                if camera_index == 0:
+                    self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+                    if not self.cap.isOpened():
+                        self.cap = cv2.VideoCapture(camera_index)
+                else:
+                    self.cap = cv2.VideoCapture(camera_index)
+                    if not self.cap.isOpened():
+                        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+                
                 if not self.cap.isOpened():
                     logger.error(f"Webcam (index {camera_index}) could not be opened.")
                     self.is_running = False
                     return False
+
             
             self.is_running = True
             # Reset smoothers
@@ -89,7 +163,7 @@ class VideoCamera:
 
     def stop(self) -> None:
         """
-        Stops the camera background reader and releases the webcam.
+        Stops the camera background reader and releases the webcam or MJPEG stream.
         """
         with self._lock:
             if not self.is_running:
@@ -98,12 +172,16 @@ class VideoCamera:
             self.is_running = False
             
             if self.thread:
-                self.thread.join(timeout=1.0)
+                self.thread.join(timeout=2.0)
                 self.thread = None
                 
             if self.cap:
                 self.cap.release()
                 self.cap = None
+
+            if self.mjpeg_reader:
+                self.mjpeg_reader.release()
+                self.mjpeg_reader = None
                 
             self.latest_frame = None
             logger.info("VideoCamera stopped and released.")
@@ -111,12 +189,16 @@ class VideoCamera:
     def _capture_loop(self) -> None:
         """
         Background thread capture and process loop.
+        Reads from MjpegReader (DroidCam WiFi) or cv2.VideoCapture (local cam).
         """
         frame_times = collections.deque(maxlen=30)
         
         while self.is_running:
             start_time = time.time()
-            ret, frame = self.cap.read()
+            if self.mjpeg_reader is not None:
+                ret, frame = self.mjpeg_reader.read()
+            else:
+                ret, frame = self.cap.read()
             if not ret or frame is None:
                 logger.warning("Failed to grab frame from camera.")
                 time.sleep(0.03)
