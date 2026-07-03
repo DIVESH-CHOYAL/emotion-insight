@@ -19,7 +19,7 @@ class FaceDetector:
             raise FileNotFoundError(f"MediaPipe face detector model file not found at {model_path}")
             
         base_options = python.BaseOptions(model_asset_path=model_path)
-        options = vision.FaceDetectorOptions(base_options=base_options, min_detection_confidence=0.15)
+        options = vision.FaceDetectorOptions(base_options=base_options, min_detection_confidence=0.45)
         self.detector = vision.FaceDetector.create_from_options(options)
         logger.info("MediaPipe Tasks Face Detector initialized successfully.")
 
